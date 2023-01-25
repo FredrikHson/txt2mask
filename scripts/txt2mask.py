@@ -23,7 +23,7 @@ debug = False
 
 class Script(scripts.Script):
 	def title(self):
-		return "txt2mask v0.1.1"
+		return "txt2mask v0.1.2"
 
 	def show(self, is_img2img):
 		return is_img2img
@@ -36,7 +36,7 @@ class Script(scripts.Script):
 		negative_mask_prompt = gr.Textbox(label="Negative mask prompt", lines=1)
 		mask_precision = gr.Slider(label="Mask precision", minimum=0.0, maximum=255.0, step=1.0, value=100.0)
 		mask_padding = gr.Slider(label="Mask padding", minimum=0.0, maximum=500.0, step=1.0, value=0.0)
-		brush_mask_mode = gr.Radio(label="Brush mask mode", choices=['discard','add','subtract'], value='discard', type="index", visible=False)
+		brush_mask_mode = gr.Radio(label="Brush mask mode", choices=['discard','add','subtract','and'], value='discard', type="index", visible=True)
 		mask_output = gr.Checkbox(label="Show mask in output?",value=True)
 
 		plug = gr.HTML(label="plug",value='<div class="gr-block gr-box relative w-full overflow-hidden border-solid border border-gray-200 gr-panel"><p>If you like my work, please consider showing your support on <strong><a href="https://patreon.com/thereforegames" target="_blank">Patreon</a></strong>. Thank you! &#10084;</p></div>')
@@ -55,7 +55,7 @@ class Script(scripts.Script):
 			return (cv2.cvtColor(numpy.array(img), cv2.COLOR_RGB2BGR))
 		def gray_to_pil(img):
 			return (Image.fromarray(cv2.cvtColor(img,cv2.COLOR_GRAY2RGBA)))
-		
+
 		def center_crop(img,new_width,new_height):
 			width, height = img.size   # Get dimensions
 
@@ -76,31 +76,31 @@ class Script(scripts.Script):
 		def process_mask_parts(these_preds,these_prompt_parts,mode,final_img = None):
 			for i in range(these_prompt_parts):
 				filename = f"mask_{mode}_{i}.png"
-                                arr = torch.sigmoid(these_preds[i][0]).cpu()
+				arr = torch.sigmoid(these_preds[i][0]).cpu()
 
-                                filename = f"mask_{mode}_{i}.png"
-                                if debug:
-                                    plt.imsave(filename, arr)
+				filename = f"mask_{mode}_{i}.png"
+				if debug:
+					plt.imsave(filename, arr)
 
-                                arr = (arr.numpy() * 256).astype(numpy.uint8)
+				arr = (arr.numpy() * 256).astype(numpy.uint8)
 
-                                _, bw_image = cv2.threshold(arr, mask_precision, 255, cv2.THRESH_BINARY)
+				_, bw_image = cv2.threshold(arr, mask_precision, 255, cv2.THRESH_BINARY)
 
-                                if mode == 0:
-                                    bw_image = numpy.invert(bw_image)
+				if mode == 0:
+					bw_image = numpy.invert(bw_image)
 
-                                if debug:
-                                    print(f"bw_image: {bw_image}")
-                                    print(f"final_img: {final_img}")
+				if debug:
+					print(f"bw_image: {bw_image}")
+					print(f"final_img: {final_img}")
 
-                                # overlay mask parts
-                                bw_image = Image.fromarray(cv2.cvtColor(bw_image, cv2.COLOR_GRAY2RGBA))
-                                if i > 0 or final_img is not None:
-                                    bw_image = overlay_mask_part(bw_image, final_img, mode)
+				# overlay mask parts
+				bw_image = Image.fromarray(cv2.cvtColor(bw_image, cv2.COLOR_GRAY2RGBA))
+				if i > 0 or final_img is not None:
+					bw_image = overlay_mask_part(bw_image, final_img, mode)
 
-                                # For debugging only:
-                                if debug:
-                                    bw_image.save(f"processed_{filename}")
+				# For debugging only:
+				if debug:
+					bw_image.save(f"processed_{filename}")
 
 				final_img = bw_image
 
@@ -114,14 +114,14 @@ class Script(scripts.Script):
 			os.makedirs(model_dir, exist_ok=True)
 			d64_file = f"{model_dir}/rd64-uni-refined.pth"
 			delimiter_string = "|"
-			
+
 			# Download model weights if we don't have them yet
 			if not os.path.exists(d64_file):
 				print("Downloading clipseg model weights...")
 				download_file(d64_file,"https://owncloud.gwdg.de/index.php/s/ioHbRzFx6th32hn/download?path=%2F&files=rd64-uni-refined.pth")
-			
+
 			# non-strict, because we only stored decoder weights (not CLIP weights)
-			model.load_state_dict(torch.load(d64_file, map_location=torch.device('cuda')), strict=False);			
+			model.load_state_dict(torch.load(d64_file, map_location=torch.device('cuda')), strict=False);
 
 			transform = transforms.Compose([
 				transforms.ToTensor(),
@@ -153,7 +153,7 @@ class Script(scripts.Script):
 
 			# process masking
 			final_img = process_mask_parts(preds,prompt_parts,1,final_img)
-
+			final_img = final_img.resize((p.init_images[0].width,p.init_images[0].height))
 			# process negative masking
 			if (brush_mask_mode == 2 and p.image_mask is not None):
 				p.image_mask = ImageOps.invert(p.image_mask)
@@ -163,16 +163,18 @@ class Script(scripts.Script):
 
 			# Increase mask size with padding
 			if (mask_padding > 0):
-                                blur = final_img.filter(ImageFilter.GaussianBlur(radius=mask_padding))
-                                final_img = blur.point(lambda x: 255 * (x > 0))
-		
+				blur = final_img.filter(ImageFilter.GaussianBlur(radius=mask_padding))
+				final_img = blur.point(lambda x: 255 * (x > 0))
+			if (brush_mask_mode == 3 and p.image_mask is not None):
+				p.image_mask = p.image_mask.convert("RGBA")
+				final_img = ImageChops.multiply(final_img, p.image_mask)
 			return (final_img)
-						
+
 
 		# Set up processor parameters correctly
 		p.mode = 1
 		p.mask_mode = 1
-		p.image_mask =  get_mask().resize((p.init_images[0].width,p.init_images[0].height))
+		p.image_mask = get_mask()
 		p.mask_for_overlay = p.image_mask
 		p.latent_mask = None # fixes inpainting full resolution
 
